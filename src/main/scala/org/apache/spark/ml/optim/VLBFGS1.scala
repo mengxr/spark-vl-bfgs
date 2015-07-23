@@ -39,7 +39,9 @@ object VLBFGS1 {
   private val stepSize: Double = 0.5
 
   /**
-   * Runs vector-free L-BFGS and return the solution as an RDD[Vector].
+   * Runs vector-free L-BFGS and return the solution as an RDD[Vector]. This is different from the
+   * paper, in which s_i and y_i are cached. We cache x_i and g_i instead to avoid creating more
+   * RDDs. The algorithm should be exactly the same as L-BFGS subject to numeric errors.
    */
   def solve(data: RDD[Array[LabeledPoint]]): RDDVector = {
     require(data.getStorageLevel != StorageLevel.NONE)
