@@ -2,14 +2,12 @@ package org.apache.spark.ml.optim
 
 import java.util.Random
 
-import org.apache.hadoop.fs.{Path, FileSystem}
-import org.apache.spark.{SparkContext, SparkConf}
-
-import scala.collection.mutable
 import scala.language.implicitConversions
 
-import com.github.fommil.netlib.BLAS.{getInstance => blas}
+import org.apache.hadoop.fs.{FileSystem, Path}
 
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.ml.optim.VectorFreeLBFGS.{Oracle, VectorSpace}
 import org.apache.spark.ml.optim.VectorRDDFunctions._
 import org.apache.spark.mllib.linalg.{BLAS, Vector, Vectors}
 import org.apache.spark.mllib.random.RandomRDDs
@@ -29,18 +27,47 @@ object VLBFGS1 {
     useDisk = true, useMemory = true, deserialized = true, replication = 3)
 
   private type RDDVector = RDD[Vector]
-  private type Inner = mutable.Map[(Int, Int), Double]
-
-  private def newInner: Inner = mutable.Map.empty.withDefaultValue(0.0)
 
   /** number of corrections */
   private val m: Int = 10
 
   /** max number of iterations */
-  var maxIter: Int = 100
+  var maxIter: Int = 20
 
   /** step size */
-  var stepSize: Double = 0.01
+  var stepSize: Double = 0.5
+
+  val vs: VectorSpace[RDDVector] = new VectorSpace[RDDVector] {
+
+    override def clean(v: RDDVector): Unit = {
+      v.unpersist(false)
+      val conf = v.context.hadoopConfiguration
+      val fs = FileSystem.get(conf)
+      v.getCheckpointFile.foreach { file =>
+        fs.delete(new Path(file), true)
+      }
+    }
+
+    override def combine(vv: (Double, RDDVector)*): RDDVector = {
+      val sc = vv.head._2.context
+      val scaled = vv.map { case (a, dv) =>
+        dv.map { v =>
+          val output = Vectors.zeros(v.size)
+          BLAS.axpy(a, v, output)
+          output
+        }
+      }
+      new UnionRDD(sc, scaled).treeSum()
+    }
+
+    override def dot(v1: RDDVector, v2: RDDVector): Double = {
+      if (v1.eq(v2)) {
+        v1.map { x => BLAS.dot(x, x) }.sum()
+      } else {
+        v1.zip(v2).map { case (x1, x2) => BLAS.dot(x1, x2) }.sum()
+      }
+    }
+  }
 
   /**
    * Runs vector-free L-BFGS and return the solution as an RDD[Vector]. This is different from the
@@ -49,136 +76,23 @@ object VLBFGS1 {
    */
   def solve(data: RDD[Array[LabeledPoint]]): RDDVector = {
     require(data.getStorageLevel != StorageLevel.NONE)
-    val sc = data.context
-    val fs = FileSystem.get(sc.hadoopConfiguration)
-    val xx: Array[RDDVector] = Array.fill(maxIter)(null)
-    val gg: Array[RDDVector] = Array.fill(maxIter)(null)
-    val XX: Inner = newInner
-    val XG: Inner = newInner
-    val GG: Inner = newInner
+
+    val oracle = new Oracle[RDDVector](m, vs)
+
     var x: RDDVector = init(data).setName("x0").persist(storageLevel)
     x.checkpoint()
     for (k <- 0 until maxIter) {
-      // println(s"x($k) = ${x.first()}")
-      // TODO: clean old vectors
-      xx(k) = x
-
-      // compute gradient
       val g = gradient(data, x).setName(s"g$k").persist(storageLevel)
       g.checkpoint()
-      val gn = math.sqrt(dot(g, g))
-      println(s"norm(g$k) = $gn")
-
-      gg(k) = g
-
-      // update XX, XG, and GG
-      val start = math.max(k - m, 0)
-      val tasks = (
-        (start to k).map(i => ("xx", i)) ++ // update XX
-        (start to k).map(j => ("xg_x", j)) ++ // update XG (x side)
-        (start until k).map(i => ("xg_g", i)) ++ // update XG (g side)
-        (start to k).map(j => ("gg", j)) // update GG
-      ).toParArray
-      tasks.foreach {
-        case ("xx", i) =>
-          val d = dot(x, xx(i))
-          XX((i, k)) = d
-          XX((k, i)) = d
-        case ("xg_x", j) =>
-          XG((k, j)) = dot(x, gg(j))
-        case ("xg_g", i) =>
-          XG((i, k)) = dot(xx(i), g)
-        case ("gg", j) =>
-         val d = dot(g, gg(j))
-         GG((j, k)) = d
-         GG((k, j)) = d
-      }
-
-      // println(s"XX: $XX")
-      // println(s"XG: $XG")
-      // println(s"GG: $GG")
-
-      // compute p
-      val (theta, tau) = computeDirection(k, XX, XG, GG)
-      val scaled = (lastM(xx, k).zip(theta) ++ lastM(gg, k).zip(tau))
-        .flatMap { case (db, d) =>
-          Option(db).map {_.map { v =>
-            val output = Vectors.zeros(v.size)
-            BLAS.axpy(d, v, output)
-            output
-          }}
-        }
-      val p = new UnionRDD(sc, scaled.toSeq).treeSum()
-      // println(s"p($k) = ${p.first()}")
-
+      val gn = math.sqrt(vs.dot(g, g))
+      println(s"norm(g($k)) = $gn")
+      val p = oracle.findDirection(x, g)
       // TODO: line search
-
-      x = axpy(stepSize, p, x).setName(s"x${k + 1}").persist(storageLevel)
+      x = vs.combine((stepSize, p), (1.0, x)).setName(s"x${k + 1}").persist(storageLevel)
       x.checkpoint()
-
-      // clean old ones
-      if (k > m) {
-        val xo = xx(k - m - 1)
-        xo.unpersist(false)
-        xo.getCheckpointFile.foreach { file =>
-          fs.delete(new Path(file), true)
-        }
-        val go = gg(k - m - 1)
-        go.unpersist(false)
-        go.getCheckpointFile.foreach { file =>
-          fs.delete(new Path(file), true)
-        }
-      }
     }
 
     x
-  }
-
-  private def lastM(xx: Array[RDDVector], k: Int): Array[RDDVector] = {
-    (k - m to k).map { i =>
-      if (i < 0) null else xx(i)
-    }.toArray
-  }
-
-  private def computeDirection(k: Int, XX: Inner, XG: Inner, GG: Inner): (Array[Double], Array[Double]) = {
-    val theta = new Array[Double](m + 1)
-    val tau = new Array[Double](m + 1)
-    val alpha = new Array[Double](m)
-    tau(m) = -1.0
-    if (k == 0) {
-      return (theta, tau)
-    }
-    val start = math.max(k - m, 0)
-    for (i <- (start until k).reverse) {
-      val j = i - (k - m)
-      var sum = 0.0
-      for (l <- k - m to k) {
-        sum += (XX((i + 1, l)) - XX((i, l))) * theta(l - (k - m)) +
-          (XG((i + 1, l)) - XG((i, l))) * tau(l - (k - m))
-      }
-      val a = sum / (XG((i + 1, i + 1)) - XG((i + 1, i)) - XG((i, i + 1)) + XG((i, i)))
-      assert(!a.isNaN, s"failed at iteration $k with i=$i.")
-      alpha(j) = a
-      tau(j + 1) += -a
-      tau(j) += a
-    }
-    val scal = (XG((k, k)) - XG((k, k - 1)) - XG((k - 1, k)) + XG((k - 1, k - 1))) /
-      (GG((k, k)) - 2.0 * GG((k, k - 1)) + GG((k - 1, k - 1)))
-    blas.dscal(m + 1, scal, theta, 1)
-    blas.dscal(m + 1, scal, tau, 1)
-    for (i <- start until k) {
-      val j = i - (k - m)
-      var sum = 0.0
-      for (l <- k - m to k) {
-        sum += (XG((l, i + 1)) - XG((l, i))) * theta(l - (k - m)) +
-          (GG((l, i + 1)) - GG(l, i)) * tau(l - (k - m))
-      }
-      val b = alpha(j) - sum / (XG((i + 1, i + 1)) - XG((i + 1, i)) - XG((i, i + 1)) + XG((i, i)))
-      assert(!b.isNaN)
-      theta(j + 1) += b
-      theta(j) += -b
-    }
-    (theta, tau)
   }
 
   private def init(data: RDD[Array[LabeledPoint]]): RDD[Vector] = {
@@ -202,22 +116,6 @@ object VLBFGS1 {
       }
       g
     }.treeSum()
-  }
-
-  private def dot(dx: RDDVector, dy: RDDVector): Double = {
-    if (dx.eq(dy)) {
-      dx.map { x => BLAS.dot(x, x) }.sum()
-    } else {
-      dx.zip(dy).map { case (x, y) => BLAS.dot(x, y) }.sum()
-    }
-  }
-
-  private def axpy(a: Double, dx: RDDVector, dy: RDDVector): RDDVector = {
-    dx.zip(dy).map { case (x, y) =>
-      val out = y.copy
-      BLAS.axpy(a, x, out)
-      out
-    }
   }
 
   def main(args: Array[String]): Unit = {

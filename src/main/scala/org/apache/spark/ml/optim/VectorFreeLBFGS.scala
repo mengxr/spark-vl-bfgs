@@ -51,7 +51,7 @@ object VectorFreeLBFGS {
           (start to m).map(i => ("XG", i, m)) ++
           (start until m).map(i => ("XG", m, i)) ++
           (start to m).map(j => ("GG", j, m))
-        ).toParArray
+        )
       tasks.foreach(updateInnerProduct)
     }
 
@@ -69,7 +69,7 @@ object VectorFreeLBFGS {
     }
 
     private def shift(vv: Array[V], v: V): Unit = {
-      vs.clean(vv.head)
+      Option(vv.head).foreach(vs.clean)
       for (i <- 0 until m) {
         vv(i) = vv(i + 1)
       }
@@ -82,32 +82,25 @@ object VectorFreeLBFGS {
       }
     }
 
-//    def clean(v: VEC): Unit = {
-//      if (v == null) {
-//        return
-//      }
-//      v.unpersist()
-//      val conf = v.context.hadoopConfiguration
-//      val fs = FileSystem.get(conf)
-//      v.getCheckpointFile.foreach { file =>
-//        fs.delete(new Path(file), true)
-//      }
-//    }
-
     def computeDirection(): V = {
+      println(s"XX =\n$XX")
+      println(s"XG =\n$XG")
+      println(s"GG =\n$GG")
       if (k == 0) {
-        vs.combine((-1.0, gg(m)))
+        return vs.combine((-1.0, gg(m)))
       }
       val theta = new Array[Double](m1)
       val tau = new Array[Double](m1)
       tau(m) = -1.0
       val alpha = new Array[Double](m)
-      for (i <- (0 until m).reverse) {
+      val start = math.max(m - k, 0)
+      for (i <- (start until m).reverse) {
         val i1 = i + 1
         var sum = 0.0
         for (j <- 0 to m) {
           sum += (XX(i1, j) - XX(i, j)) * theta(j) + (XG(i1, j) - XG(i, j)) * tau(j)
         }
+        assert(sum != 0.0)
         val a = sum / (XG(i1, i1) - XG(i1, i) - XG(i, i1) + XG(i, i))
         assert(!a.isNaN)
         alpha(i) = a
@@ -119,7 +112,7 @@ object VectorFreeLBFGS {
         (GG(m, m) - 2.0 * GG(m, mm1) + GG(mm1, mm1))
       blas.dscal(m1, scal, theta, 1)
       blas.dscal(m1, scal, tau, 1)
-      for (i <- 0 until m) {
+      for (i <- start until m) {
         val i1 = i + 1
         var sum = 0.0
         for (j <- 0 to m) {
