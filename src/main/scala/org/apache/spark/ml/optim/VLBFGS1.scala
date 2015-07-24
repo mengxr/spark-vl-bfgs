@@ -36,7 +36,7 @@ object VLBFGS1 {
   private val m: Int = 10
 
   /** max number of iterations */
-  private val maxIter: Int = 20
+  private val maxIter: Int = 10
 
   /** step size */
   private val stepSize: Double = 0.5

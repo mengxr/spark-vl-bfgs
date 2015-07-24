@@ -8,7 +8,7 @@ import org.apache.spark.mllib.linalg._
 
 class VectorRDDFunctions(self: RDD[Vector]) {
 
-  def treeSum(depth: Int = 3): RDD[Vector] = {
+  def treeSum(depth: Int = 2): RDD[Vector] = {
     val zeroValue: Vector = null
     val seqOp = (s: Vector, v: Vector) => {
       if (s != null) {
