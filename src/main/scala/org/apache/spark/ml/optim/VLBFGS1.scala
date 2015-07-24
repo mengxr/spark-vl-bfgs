@@ -68,25 +68,25 @@ object VLBFGS1 {
 
       // update XX, XG, and GG
       val start = math.max(k - m, 0)
-      // update XX
-      (start to k).par.foreach { i =>
-        val d = dot(x, xx(i))
-        XX((i, k)) = d
-        XX((k, i)) = d
-      }
-      // update XG (x side)
-      (start to k).par.foreach { j =>
-        XG((k, j)) = dot(x, gg(j))
-      }
-      // update XG (g side)
-      (start until k).par.foreach { i => // do not compute xg
-        XG((i, k)) = dot(xx(i), g)
-      }
-      // update GG
-      (start to k).par.foreach { j =>
-        val d = dot(g, gg(j))
-        GG((j, k)) = d
-        GG((k, j)) = d
+      val tasks = (
+        (start to k).map(i => ("xx", i)) ++ // update XX
+        (start to k).map(j => ("xg_x", j)) ++ // update XG (x side)
+        (start until k).map(i => ("xg_g", i)) ++ // update XG (g side)
+        (start to k).map(j => ("gg", j)) // update GG
+      ).toParArray
+      tasks.foreach {
+        case ("xx", i) =>
+          val d = dot(x, xx(i))
+          XX((i, k)) = d
+          XX((k, i)) = d
+        case ("xg_x", j) =>
+          XG((k, j)) = dot(x, gg(j))
+        case ("xg_g", i) =>
+          XG((i, k)) = dot(xx(i), g)
+        case ("gg", j) =>
+         val d = dot(g, gg(j))
+         GG((j, k)) = d
+         GG((k, j)) = d
       }
 
       // println(s"XX: $XX")
