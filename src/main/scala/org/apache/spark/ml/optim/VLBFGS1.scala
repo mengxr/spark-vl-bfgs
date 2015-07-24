@@ -37,10 +37,10 @@ object VLBFGS1 {
   private val m: Int = 10
 
   /** max number of iterations */
-  private val maxIter: Int = 20
+  private val maxIter: Int = 100
 
   /** step size */
-  private val stepSize: Double = 0.5
+  private val stepSize: Double = 0.2
 
   /**
    * Runs vector-free L-BFGS and return the solution as an RDD[Vector]. This is different from the
