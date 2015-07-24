@@ -25,7 +25,7 @@ import org.apache.spark.storage.StorageLevel
 object VLBFGS1 {
 
   private val storageLevel = StorageLevel(
-    useDisk = true, useMemory = true, deserialized = true, replication = 8)
+    useDisk = true, useMemory = true, deserialized = true, replication = 3)
 
   private type RDDVector = RDD[Vector]
   private type Inner = mutable.Map[(Int, Int), Double]
@@ -55,6 +55,7 @@ object VLBFGS1 {
     val XG: Inner = newInner
     val GG: Inner = newInner
     var x: RDDVector = init(data).setName("x0").persist(storageLevel)
+    x.checkpoint()
     for (k <- 0 until maxIter) {
       // println(s"x($k) = ${x.first()}")
       // TODO: clean old vectors
@@ -62,7 +63,9 @@ object VLBFGS1 {
 
       // compute gradient
       val g = gradient(data, x).setName(s"g$k").persist(storageLevel)
-      // println(s"g($k) = ${g.first()}")
+      g.checkpoint()
+      val gn = math.sqrt(dot(g, g))
+      println(s"norm(g$k) = $gn")
 
       gg(k) = g
 
@@ -109,6 +112,7 @@ object VLBFGS1 {
       // TODO: line search
 
       x = axpy(stepSize, p, x).setName(s"x${k + 1}").persist(storageLevel)
+      x.checkpoint()
 
       // clean old ones
       if (k > m) {
