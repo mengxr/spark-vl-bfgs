@@ -121,7 +121,7 @@ object VectorFreeLBFGS {
         theta(i + 1) += b
         theta(i) += -b
       }
-      vs.combine((theta.zip(xx) ++ tau.zip(gg)).filter(_._2 != null): _*)
+      vs.combine((theta.zip(xx) ++ tau.zip(gg)).filter(_._1 != 0.0): _*)
     }
   }
 }
