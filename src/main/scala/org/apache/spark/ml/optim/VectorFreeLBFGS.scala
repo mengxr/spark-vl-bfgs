@@ -1,14 +1,13 @@
 package org.apache.spark.ml.optim
 
+import org.apache.spark.Logging
+
 import scala.reflect.ClassTag
 
 import breeze.linalg.{DenseMatrix => BDM}
 import com.github.fommil.netlib.BLAS.{getInstance => blas}
 
 object VectorFreeLBFGS {
-
-  // private type VEC = RDD[(Int, Vector)]
-  // private type MAT = RDD[((Int, Int), Matrix)]
 
   trait VectorSpace[V] {
     /** inner product */
@@ -20,7 +19,7 @@ object VectorFreeLBFGS {
     def clean(v: V): Unit
   }
 
-  class Oracle[V: ClassTag](val m: Int, val vs: VectorSpace[V]) {
+  class Oracle[V: ClassTag](val m: Int, val vs: VectorSpace[V]) extends Logging {
 
     require(m > 0)
 
@@ -51,6 +50,9 @@ object VectorFreeLBFGS {
         (start until m).map(i => ("XG", m, i)) ++
         (start to m).map(i => ("GG", i, m)))
         .par.foreach(updateInnerProduct)
+      log.info(s"XX =\n$XX")
+      log.info(s"XG =\n$XG")
+      log.info(s"GG =\n$GG")
     }
 
     private def updateInnerProduct(task: (String, Int, Int)): Unit = task match {
@@ -81,9 +83,6 @@ object VectorFreeLBFGS {
     }
 
     def computeDirection(): V = {
-      println(s"XX =\n$XX")
-      println(s"XG =\n$XG")
-      println(s"GG =\n$GG")
       if (k == 0) {
         return vs.combine((-1.0, gg(m)))
       }
