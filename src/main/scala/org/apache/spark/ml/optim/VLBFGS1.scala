@@ -2,6 +2,7 @@ package org.apache.spark.ml.optim
 
 import java.util.Random
 
+import org.apache.hadoop.fs.{Path, FileSystem}
 import org.apache.spark.{SparkContext, SparkConf}
 
 import scala.collection.mutable
@@ -36,7 +37,7 @@ object VLBFGS1 {
   private val m: Int = 10
 
   /** max number of iterations */
-  private val maxIter: Int = 10
+  private val maxIter: Int = 20
 
   /** step size */
   private val stepSize: Double = 0.5
@@ -49,6 +50,7 @@ object VLBFGS1 {
   def solve(data: RDD[Array[LabeledPoint]]): RDDVector = {
     require(data.getStorageLevel != StorageLevel.NONE)
     val sc = data.context
+    val fs = FileSystem.get(sc.hadoopConfiguration)
     val xx: Array[RDDVector] = Array.fill(maxIter)(null)
     val gg: Array[RDDVector] = Array.fill(maxIter)(null)
     val XX: Inner = newInner
@@ -116,8 +118,16 @@ object VLBFGS1 {
 
       // clean old ones
       if (k > m) {
-        xx(k - m - 1).unpersist(false)
-        gg(k - m - 1).unpersist(false)
+        val xo = xx(k - m - 1)
+        xo.unpersist(false)
+        xo.getCheckpointFile.foreach { file =>
+          fs.delete(new Path(file), true)
+        }
+        val go = gg(k - m - 1)
+        go.unpersist(false)
+        go.getCheckpointFile.foreach { file =>
+          fs.delete(new Path(file), true)
+        }
       }
     }
 
@@ -213,6 +223,7 @@ object VLBFGS1 {
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName("VLBFGS").setMaster("local[*]")
     val sc = new SparkContext(conf)
+    sc.setCheckpointDir("/tmp/checkpoint")
     val n = 1000
     val p = 100
     val random = new Random(0L)
@@ -228,8 +239,8 @@ object VLBFGS1 {
 
     val x = solve(data).first()
 
-    // println(s"x_exact = $xExact")
-    // println(s"x_vlbfgs = $x")
+    println(s"x_exact = $xExact")
+    println(s"x_vlbfgs = $x")
 
     sc.stop()
   }
