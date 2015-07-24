@@ -24,6 +24,9 @@ import org.apache.spark.storage.StorageLevel
  */
 object VLBFGS1 {
 
+  private val storageLevel = StorageLevel(
+    useDisk = true, useMemory = true, deserialized = true, replication = 8)
+
   private type RDDVector = RDD[Vector]
   private type Inner = mutable.Map[(Int, Int), Double]
 
@@ -33,7 +36,7 @@ object VLBFGS1 {
   private val m: Int = 10
 
   /** max number of iterations */
-  private val maxIter: Int = 50
+  private val maxIter: Int = 20
 
   /** step size */
   private val stepSize: Double = 0.5
@@ -51,15 +54,15 @@ object VLBFGS1 {
     val XX: Inner = newInner
     val XG: Inner = newInner
     val GG: Inner = newInner
-    var x: RDDVector = init(data).cache()
+    var x: RDDVector = init(data).setName("x0").persist(storageLevel)
     for (k <- 0 until maxIter) {
-      println(s"x($k) = ${x.first()}")
+      // println(s"x($k) = ${x.first()}")
       // TODO: clean old vectors
       xx(k) = x
 
       // compute gradient
-      val g = gradient(data, x).cache() // TODO: replicate factor
-      println(s"g($k) = ${g.first()}")
+      val g = gradient(data, x).setName(s"g$k").persist(storageLevel)
+      // println(s"g($k) = ${g.first()}")
 
       gg(k) = g
 
@@ -86,9 +89,9 @@ object VLBFGS1 {
         GG((k, j)) = d
       }
 
-      println(s"XX: $XX")
-      println(s"XG: $XG")
-      println(s"GG: $GG")
+      // println(s"XX: $XX")
+      // println(s"XG: $XG")
+      // println(s"GG: $GG")
 
       // compute p
       val (theta, tau) = computeDirection(k, XX, XG, GG)
@@ -101,11 +104,17 @@ object VLBFGS1 {
           }}
         }
       val p = new UnionRDD(sc, scaled.toSeq).treeSum()
-      println(s"p($k) = ${p.first()}")
+      // println(s"p($k) = ${p.first()}")
 
       // TODO: line search
 
-      x = axpy(stepSize, p, x).cache()
+      x = axpy(stepSize, p, x).setName(s"x${k + 1}").persist(storageLevel)
+
+      // clean old ones
+      if (k > m) {
+        xx(k - m - 1).unpersist(false)
+        gg(k - m - 1).unpersist(false)
+      }
     }
 
     x
@@ -182,7 +191,11 @@ object VLBFGS1 {
   }
 
   private def dot(dx: RDDVector, dy: RDDVector): Double = {
-    dx.zip(dy).map { case (x, y) => BLAS.dot(x, y) }.sum()
+    if (dx.eq(dy)) {
+      dx.map { x => BLAS.dot(x, x) }.sum()
+    } else {
+      dx.zip(dy).map { case (x, y) => BLAS.dot(x, y) }.sum()
+    }
   }
 
   private def axpy(a: Double, dx: RDDVector, dy: RDDVector): RDDVector = {
@@ -211,8 +224,8 @@ object VLBFGS1 {
 
     val x = solve(data).first()
 
-    println(s"x_exact = $xExact")
-    println(s"x_vlbfgs = $x")
+    // println(s"x_exact = $xExact")
+    // println(s"x_vlbfgs = $x")
 
     sc.stop()
   }
