@@ -46,13 +46,11 @@ object VectorFreeLBFGS {
       shift(XG)
       shift(GG)
       val start = math.max(m - k, 0)
-      val tasks = (
-        (start to m).map(i => ("XX", i, m)) ++
-          (start to m).map(i => ("XG", i, m)) ++
-          (start until m).map(i => ("XG", m, i)) ++
-          (start to m).map(j => ("GG", j, m))
-        )
-      tasks.foreach(updateInnerProduct)
+      ((start to m).map(i => ("XX", i, m)) ++
+        (start to m).map(i => ("XG", i, m)) ++
+        (start until m).map(i => ("XG", m, i)) ++
+        (start to m).map(i => ("GG", i, m)))
+        .par.foreach(updateInnerProduct)
     }
 
     private def updateInnerProduct(task: (String, Int, Int)): Unit = task match {
