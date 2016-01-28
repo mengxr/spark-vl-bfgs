@@ -1,4 +1,6 @@
-Spark ALS
+Spark VL-BFGS: Vector-free L-BFGS implementation on Apache Spark
 ===
 
-Another, hopefully better, implementation of ALS on Spark.
+http://papers.nips.cc/paper/5333-large-scale-l-bfgs-using-mapreduce.pdf
+
+
